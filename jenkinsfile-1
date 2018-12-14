@@ -1,0 +1,82 @@
+mport java.text.SimpleDateFormat
+
+def getLastSuccessBuild(build)
+{
+    if(build == null)
+        return null
+    
+    prev = build.getPreviousBuild()
+    
+    if(prev == null)
+        return null
+
+    if(prev.result == 'SUCCESS')
+        return prev
+    else
+        getLastSuccessBuild(prev)
+}
+
+def getBuildTime(build) {
+    
+    if(build == null)
+        return '19871223000000'
+    date = new Date(build.getTimeInMillis())
+    dateFormat = new SimpleDateFormat("yyyyMMddHHmmss");
+
+    return dateFormat.format(date)
+}
+
+pipeline {
+  agent { node { label 'linux-docker-slave' } }
+  stages {
+    stage('checkout')  {
+      steps {
+        cleanWs cleanWhenAborted: false, cleanWhenFailure: false, cleanWhenUnstable: false
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: '.', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/DebugLog/cvapp-log-analyzer'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'samba_utils', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/utility/samba_utils'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'mantis_utils', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/utility/mantis_utils'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'files', ignoreExternalsOption: true, local: 'debug-symbol', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/DebugLog/DebugLogFormatter']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+      }
+    }
+    stage('get-last-build-time') {
+      steps {
+        script  {
+          build = getLastSuccessBuild(currentBuild)
+          
+          LAST_BUILD_TIME = getBuildTime(build)
+          println('last cussess build time:' + LAST_BUILD_TIME)
+        }
+      }
+    }
+    stage('prepare') {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        echo "${LAST_BUILD_TIME}"
+        sh 'pip3 install -r requirements.txt'
+      }
+    }
+    stage('parse') {
+      environment {
+          LAST_BUILD_TIME = "${LAST_BUILD_TIME}"
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          sh '''
+              python3 ./analyzer.py -a -t debug-symbol/logFormatSymbolsCv2k.csv \
+              -P 'CV2KApp窓口' \
+              --url 'http://osoft-de-c.olympus.co.jp/mantis/ipf3/app/api/soap/mantisconnect.php?wsdl' \
+              --username $USERNAME --password $PASSWORD -f $LAST_BUILD_TIME
+            '''
+        }
+      }
+    }
+  
+    stage('publish')  {
+      steps {
+        cifsPublisher(publishers: [[configName: 'f3user-log_analysis', transfers: [[cleanRemote: false, excludes: '', flatten: true, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: ',', remoteDirectory: 'build-$BUILD_NUMBER', remoteDirectorySDF: false, removePrefix: '', sourceFiles: '*.zip']], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: true]])
+      }
+    }
+  }
+}
