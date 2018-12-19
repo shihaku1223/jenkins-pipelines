@@ -81,18 +81,23 @@ pipeline {
       steps {
         withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
           script  {
-          STATUS = sh(returnStatus: true,
-            script: '''
-              python3 ./analyzer.py -z -a -t debug-symbol/logFormatSymbolsCv2k.csv \
-              -P 'CV2KApp窓口' \
-              --url 'http://osoft-de-c.olympus.co.jp/mantis/ipf3/app/api/soap/mantisconnect.php?wsdl' \
-              --username $USERNAME --password $PASSWORD -f $LAST_BUILD_TIME
-              ''')
+            try {
+              STATUS = sh(returnStatus: true,
+                script: '''
+                  python3 ./analyzer.py -z -a -t debug-symbol/logFormatSymbolsCv2k.csv \
+                  -P 'CV2KApp窓口' \
+                  --url 'http://osoft-de-c.olympus.co.jp/mantis/ipf3/app/api/soap/mantisconnect.php?wsdl' \
+                  --username $USERNAME --password $PASSWORD -f $LAST_BUILD_TIME
+                  ''')
+            } catch(Exception ex) {
+                println(ex)
+                currentBuild.result = 'FAILURE'
+                error(ex)
+            }
           }
         }
       }
     }
-
     stage('list-archive')  {
       environment {
           http_proxy = 'http://proxy.olympus.co.jp:8080'
@@ -105,7 +110,6 @@ pipeline {
             echo """
              ${file.name} ${file.path} ${file.directory} ${file.length} ${file.lastModified}
             """
-
             withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
               name = file.path
               issueId = name.substring(0, name.indexOf('.'))
@@ -116,7 +120,7 @@ pipeline {
                   --url 'http://osoft-de-c.olympus.co.jp/mantis/ipf3/app/api/soap/mantisconnect.php?wsdl' \
                   --username $USERNAME --password $PASSWORD \
                   --issueId $issueId \
-                  --message "解析したログのパス\n\\\\\\\\osw-de-01.is.olympus.global\\f3share\\ci_data\\app_service_desk\\log_analysis\\build-$BUILD_NUMBER\\${file.path}"
+                  --message "ログ解析結果\n\\\\\\\\osw-de-01.is.olympus.global\\f3share\\ci_data\\app_service_desk\\log_analysis\\build-$BUILD_NUMBER\\${file.path}"
                """
             }
           }
