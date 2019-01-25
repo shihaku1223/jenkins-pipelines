@@ -14,8 +14,7 @@ def getLastSuccessBuild(build)
 
     if(prev.result == 'SUCCESS')
         return prev
-    else
-        getLastSuccessBuild(prev)
+    return getLastSuccessBuild(prev)
 }
 
 def getBuildTime(build) {
