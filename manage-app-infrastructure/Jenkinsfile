@@ -1,0 +1,122 @@
+import java.time.ZonedDateTime
+import java.text.SimpleDateFormat
+
+def toDateString(time) {
+  def millis = time.toInstant().toEpochMilli()
+  println millis
+
+  def date = new Date(millis)
+  def dateFormat = new SimpleDateFormat("yyyyMMddHHmmss");
+  return dateFormat.format(date)
+}
+
+def getCurrentZonedTime() {
+  def localTime = ZonedDateTime.now() 
+  return localTime
+}
+
+
+pipeline {
+  agent { node { label 'linux-docker-slave' } }
+  stages {
+    stage('checkout')  {
+      steps {
+        script  {
+          currentTime = getCurrentZonedTime()
+          before7DaysTime = currentTime.minusDays(7)
+          println toDateString(currentTime)
+          println toDateString(before7DaysTime)
+        }
+
+        cleanWs()
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'jenkins-groovy', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/jenkins/jenkins-groovy'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'MTTR', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/integ/manage_app_infrastructrue/MTTR'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'failed_build_rate', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/integ/manage_app_infrastructrue/failed_build_rate']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+      }
+    }
+    stage('prepare') {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        sh 'pip3 install -r jenkins-groovy/requirements.txt'
+        sh '''
+          cd jenkins-groovy
+          chmod +x extract-json.sh
+        '''
+      }
+    }
+    stage('run') {
+      environment {
+          PYTHON = 'python3'
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'ipf3-system-token', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          script  {
+            viewPaths = [ "CV2K/18_INTEG/01_VxWorks", "CV2K/18_INTEG/00_Win_build" ]
+            viewPaths.each {
+              println 'check view:' + it
+
+              def currentTimeStr = toDateString(currentTime)
+              mttrOutputPath = 'MTTR-' + it.replace("/", "_") + '-' + currentTimeStr + '.json'
+              sh('''
+                  cd jenkins-groovy
+
+                  $PYTHON execute.py \
+                      -u $USERNAME \
+                      -t $PASSWORD \
+                      -U http://10.155.66.151/jenkins \
+                      -g master/calculateJobsMTTRWithView.groovy \
+                      --view-path '''+it+''' | ./extract-json.sh > '''+mttrOutputPath+'''
+
+                  mv '''+mttrOutputPath+''' ../MTTR
+              ''')
+
+              failedRateOutputPath = 'failed-rate-' + it.replace("/", "_") + '-' + currentTimeStr + '.json'
+
+              def before7DaysTimeStr = toDateString(before7DaysTime)
+              sh('''
+                  cd jenkins-groovy
+
+                  $PYTHON execute.py \
+                      -u $USERNAME \
+                      -t $PASSWORD \
+                      -U http://10.155.66.151/jenkins \
+                      -g master/getJobFailedBuildInfo.groovy \
+                      --to-date '''+currentTimeStr+''' \
+                      --from-date '''+before7DaysTimeStr+''' \
+                      --view-path '''+it+''' | ./extract-json.sh > '''+failedRateOutputPath+'''
+
+                  mv '''+failedRateOutputPath+''' ../failed_build_rate
+              ''')
+            }
+          }
+        }
+      }
+    }
+    stage('commit log') {
+	  steps {
+        withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          sh('''
+            cd failed_build_rate
+            svn upgrade
+            svn add '''+failedRateOutputPath+'''
+            svn commit \
+              --username $USERNAME \
+              --password $PASSWORD \
+              -m "refs #40604: manage_app_infrastrcuture, add failed build rate data, build number $BUILD_NUMBER"
+		  ''')
+
+          sh('''
+            cd MTTR
+            svn upgrade
+            svn add '''+mttrOutputPath+'''
+            svn commit \
+              --username $USERNAME \
+              --password $PASSWORD \
+              -m "refs #40604: manage_app_infrastrcuture, add MTTR data, build number $BUILD_NUMBER"
+		  ''')
+        }
+      }
+    }
+  }
+}
