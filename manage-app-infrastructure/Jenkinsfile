@@ -1,6 +1,8 @@
 import java.time.ZonedDateTime
 import java.text.SimpleDateFormat
 
+import hudson.plugins.nested_view.NestedView;
+
 def toDateString(time) {
   def millis = time.toInstant().toEpochMilli()
   println millis
@@ -15,21 +17,87 @@ def getCurrentZonedTime() {
   return localTime
 }
 
+def getNestedView(views, viewList) {
+
+  if(viewList.size() == 0)
+    return views
+
+  def currentView = null
+  views.each {
+	if(it.name == viewList[0]) {
+	  println 'match ' + it.name
+	  viewList.remove(0)
+	  currentView = it
+    }
+  }
+
+  if(currentView instanceof NestedView) {
+	return getNestedView(currentView.getViews(), viewList)
+  }
+
+  if(currentView instanceof ListView) {
+    return currentView
+  }
+}
+
+def getViewJobs(viewPath) {
+
+  println 'check ' + viewPath
+
+  def view = getNestedView(Hudson.instance.getViews(), viewPath)
+  def list = view.getItems()
+
+  return list
+}
+
+def updateJobDescription(jobname, description) {
+
+  def job = Hudson.instance.getItem(jobname)
+  def desc = job.description
+  list = desc.split('##APP-INFRA##')
+
+  if(list.length == 1) {
+    println 'no link found append link'
+    job.description = desc + description
+  }
+  else if(list.length == 2) {
+    println 'found link replace it'
+    println list[1]
+    job.description = list[0] + description
+  }
+}
 
 pipeline {
   agent { node { label 'linux-docker-slave' } }
   stages {
     stage('checkout')  {
       steps {
-        script  {
-          currentTime = getCurrentZonedTime()
-          before7DaysTime = currentTime.minusDays(7)
-          println toDateString(currentTime)
-          println toDateString(before7DaysTime)
-        }
 
         cleanWs()
-        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'jenkins-groovy', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/jenkins/jenkins-groovy'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'MTTR', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/integ/manage_app_infrastructrue/MTTR'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'failed_build_rate', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/integ/manage_app_infrastructrue/failed_build_rate']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'jenkins-groovy', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/jenkins/jenkins-groovy']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'gen-plot-graph', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/utility/gen-plot-graph']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'empty', ignoreExternalsOption: true, local: 'manage_app_infrastructrue', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/integ/manage_app_infrastructrue']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+
+
+        withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          script  {
+            currentTime = getCurrentZonedTime()
+            before7DaysTime = currentTime.minusDays(7)
+            currentTimeStr = toDateString(currentTime)
+            println toDateString(currentTime)
+            println toDateString(before7DaysTime)
+
+            sh('''
+              cd manage_app_infrastructrue
+              svn upgrade
+              svn update MTTR --depth empty --username $USERNAME --password $PASSWORD
+              svn update failed_build_rate --depth empty --username $USERNAME --password $PASSWORD
+              svn update slaves_info --depth empty --username $USERNAME --password $PASSWORD
+            ''')
+          }
+        }
       }
     }
     stage('prepare') {
@@ -39,6 +107,7 @@ pipeline {
       }
       steps {
         sh 'pip3 install -r jenkins-groovy/requirements.txt'
+        sh 'pip3 install -r gen-plot-graph/requirements.txt'
         sh '''
           cd jenkins-groovy
           chmod +x extract-json.sh
@@ -48,6 +117,7 @@ pipeline {
     stage('run') {
       environment {
           PYTHON = 'python3'
+          JENKINS_URL = 'http://10.155.66.151/jenkins'
       }
       steps {
         withCredentials([usernamePassword(credentialsId: 'ipf3-system-token', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
@@ -56,7 +126,6 @@ pipeline {
             viewPaths.each {
               println 'check view:' + it
 
-              def currentTimeStr = toDateString(currentTime)
               mttrOutputPath = 'MTTR-' + it.replace("/", "_") + '-' + currentTimeStr + '.json'
               sh('''
                   cd jenkins-groovy
@@ -64,57 +133,99 @@ pipeline {
                   $PYTHON execute.py \
                       -u $USERNAME \
                       -t $PASSWORD \
-                      -U http://10.155.66.151/jenkins \
+                      -U $JENKINS_URL \
                       -g master/calculateJobsMTTRWithView.groovy \
                       --view-path '''+it+''' | ./extract-json.sh > '''+mttrOutputPath+'''
 
-                  mv '''+mttrOutputPath+''' ../MTTR
+                  mv '''+mttrOutputPath+''' ../manage_app_infrastructrue/MTTR
               ''')
 
               failedRateOutputPath = 'failed-rate-' + it.replace("/", "_") + '-' + currentTimeStr + '.json'
 
-              def before7DaysTimeStr = toDateString(before7DaysTime)
               sh('''
                   cd jenkins-groovy
 
                   $PYTHON execute.py \
                       -u $USERNAME \
                       -t $PASSWORD \
-                      -U http://10.155.66.151/jenkins \
+                      -U $JENKINS_URL \
                       -g master/getJobFailedBuildInfo.groovy \
-                      --to-date '''+currentTimeStr+''' \
-                      --from-date '''+before7DaysTimeStr+''' \
                       --view-path '''+it+''' | ./extract-json.sh > '''+failedRateOutputPath+'''
 
-                  mv '''+failedRateOutputPath+''' ../failed_build_rate
+                  mv '''+failedRateOutputPath+''' ../manage_app_infrastructrue/failed_build_rate
               ''')
             }
+
+            slaveWorkingInfoPath = 'slaves-working-info-' + currentTimeStr + '.json'
+            sh('''
+                cd jenkins-groovy
+
+                $PYTHON execute.py \
+                    -u $USERNAME \
+                    -t $PASSWORD \
+                    -U $JENKINS_URL \
+                    -g master/getSlaveMTTRAndWorkingInfo.groovy | ./extract-json.sh > '''+slaveWorkingInfoPath+'''
+                mv '''+slaveWorkingInfoPath+''' ../manage_app_infrastructrue/slaves_info
+            ''')
           }
         }
       }
     }
+    stage('draw graph') {
+      environment {
+          PYTHON = 'python3'
+      }
+      steps {
+        script  {
+          sh('''
+            cd gen-plot-graph
+            $PYTHON plot-gen.py -T failed-rate -F $WORKSPACE/manage_app_infrastructrue/failed_build_rate
+            $PYTHON plot-gen.py -T mttr -F $WORKSPACE/manage_app_infrastructrue/MTTR
+          ''')
+
+          viewPaths.each {
+            def jobs = getViewJobs(new ArrayList<String>(Arrays.asList(it.split('/'))))
+            def workspaceUrl = env.BUILD_URL + '/execution/node/3/ws'
+
+            jobs.each {
+              def mttrLink = '<a href="' + workspaceUrl + '/gen-plot-graph/graph/mttr/' + it.name + '_MTTR.png' + '">MTTR Graph</a>'
+              def failedLink = '<a href="' + workspaceUrl + '/gen-plot-graph/graph/failed-rate/' + it.name + '_failed-rate.png' + '">Failed rate Graph</a>'
+
+			  updateJobDescription(it.name, '\n##APP-INFRA##' + mttrLink + '\n' + failedLink + '##APP-INFRA##')
+            }
+          }
+        }
+	  }
+	}
     stage('commit log') {
 	  steps {
         withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
-          sh('''
-            cd failed_build_rate
-            svn upgrade
-            svn add '''+failedRateOutputPath+'''
-            svn commit \
-              --username $USERNAME \
-              --password $PASSWORD \
-              -m "refs #40604: manage_app_infrastrcuture, add failed build rate data, build number $BUILD_NUMBER"
-		  ''')
+          script  {
+            viewPaths = [ "CV2K/18_INTEG/01_VxWorks", "CV2K/18_INTEG/00_Win_build" ]
+            viewPaths.each {
 
-          sh('''
-            cd MTTR
-            svn upgrade
-            svn add '''+mttrOutputPath+'''
-            svn commit \
-              --username $USERNAME \
-              --password $PASSWORD \
-              -m "refs #40604: manage_app_infrastrcuture, add MTTR data, build number $BUILD_NUMBER"
-		  ''')
+              failedRateOutputPath = 'failed-rate-' + it.replace("/", "_") + '-' + currentTimeStr + '.json'
+              sh('''
+                cd manage_app_infrastructrue/failed_build_rate
+                svn add '''+failedRateOutputPath+'''
+              ''')
+
+              mttrOutputPath = 'MTTR-' + it.replace("/", "_") + '-' + currentTimeStr + '.json'
+              sh('''
+                cd manage_app_infrastructrue/MTTR
+                svn add '''+mttrOutputPath+'''
+              ''')
+            }
+            sh('''
+              cd manage_app_infrastructrue/slaves_info
+              svn add '''+slaveWorkingInfoPath+'''
+              cd ..
+              svn commit \
+                --username $USERNAME \
+                --password $PASSWORD \
+                -m "refs #40604: manage_app_infrastrcuture, add MTTR, failed-rate, slave info data, build number $BUILD_NUMBER"
+            ''')
+          }
         }
       }
     }
