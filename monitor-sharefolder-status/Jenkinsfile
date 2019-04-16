@@ -1,0 +1,92 @@
+pipeline {
+  agent { node { label 'linux-docker-slave' } }
+
+  stages {
+    stage('check mount point')  {
+      steps {
+        script {
+          withCredentials([usernamePassword(credentialsId: '59a5749f-6d97-40ef-bf2d-1d0bfdf2f197', passwordVariable: 'F3PASS', usernameVariable: 'F3USER')]) {
+            sh(returnStdout: true,
+              script: '''
+                test -d /mnt/f3share || mkdir -p /mnt/f3share
+                bash get_mount_status.sh //10.156.2.68/f3share || mount -t cifs //10.156.2.68/f3share -o username=$F3USER,password=$F3PASS /mnt/f3share/
+              '''
+            )
+          }
+          withCredentials([usernamePassword(credentialsId: 'osw-backup', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+            sh(returnStdout: true,
+              script: '''
+                test -d /mnt/ipf3_app || mkdir -p /mnt/ipf3_app
+                bash get_mount_status.sh //osw-ish21/MR110701_IPF3アプリ || mount -t cifs //osw-ish21/MR110701_IPF3アプリ -o username=$USER,password=$PASS,iocharset=utf8 /mnt/ipf3_app
+
+                test -d /mnt/ipf3_app_keep || mkdir -p /mnt/ipf3_app_keep
+                bash get_mount_status.sh //osw-ish23/MR110701_IPF3アプリ\\(保管\\) || mount -t cifs //osw-ish23/MR110701_IPF3アプリ\\(保管\\) -o username=$USER,password=$PASS,iocharset=utf8 /mnt/ipf3_app_keep
+
+              '''
+            )
+          }
+        }
+      }
+    }
+
+    stage('retrieve usage')  {
+      environment {
+          THRESHOLD = '40000'
+      }
+      steps {
+        script {
+          def newline = /"\\\n"/
+          sh'''
+            bash -c 'df -t cifs -BM' > result
+            cat /dev/null > message
+          '''
+          def message = sh(returnStdout: true,
+            script:'''
+              bash retrieve_mount_point_usage.sh //10.156.2.68/f3share $THRESHOLD | tee -a message
+            '''
+          )
+          if( message != "") {
+            sh"""echo $newline >> message"""
+          }
+
+          def res = sh(returnStdout: true,
+            script:'''
+              bash retrieve_mount_point_usage.sh //osw-ish21/MR110701_IPF3アプリ $THRESHOLD | tee -a message
+            '''
+          )
+          if( res != "") {
+            sh"""echo $newline >> message"""
+            message += res
+          }
+
+          res = sh(returnStdout: true,
+            script:'''
+              bash retrieve_mount_point_usage.sh //osw-ish23/MR110701_IPF3アプリ\\(保管\\) $THRESHOLD | tee -a message
+            '''
+          )
+          if( res != "") {
+            message += res
+          }
+
+          if( message != "") {
+            echo message
+            sh'''
+              bash ./post_message.sh $(cat message)
+            '''
+          }
+        }
+      }
+    }
+    stage('umount') {
+      steps {
+        sh '''
+          umount /mnt/f3share
+          umount /mnt/ipf3_app
+          umount /mnt/ipf3_app_keep
+        '''
+
+        archiveArtifacts 'result'
+      }
+    }
+  }
+}
