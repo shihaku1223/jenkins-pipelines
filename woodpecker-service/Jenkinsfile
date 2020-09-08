@@ -1,0 +1,159 @@
+import java.text.SimpleDateFormat
+import java.io.File;
+import java.io.FilenameFilter;
+
+def getLastSuccessBuild(build)
+{
+    if(build == null)
+        return null
+    
+    prev = build.getPreviousBuild()
+    
+    if(prev == null)
+        return null
+
+    if(prev.result == 'SUCCESS')
+        return prev
+
+    return getLastSuccessBuild(prev)
+}
+
+def getBuildTime(build) {
+    
+    if(build == null)
+        return '19871223000000'
+    date = new Date(build.getTimeInMillis())
+    dateFormat = new SimpleDateFormat("yyyyMMddHHmmss");
+
+    return dateFormat.format(date)
+}
+
+def getFiles(String baseDir, String endsWith) {
+    File dir = new File(baseDir)
+    return Arrays.asList(dir.listFiles( new FilenameFilter() {
+      public boolean accept(File d, String name) {
+        if(filename == null)
+            return true;
+
+        if (name.endsWith(endsWith))
+            return true;
+        return false;
+      }
+    }
+    ))
+}
+
+pipeline {
+  agent { node { label 'linux-docker-slave' } }
+  stages {
+    stage('checkout')  {
+      steps {
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'cvapp-log-analyzer', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/DebugLog/cvapp-log-analyzer'], [cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'cvapp-log-analyzer/mantis_utils', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/utility/mantis_utils']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+
+       }
+    }
+    stage('get-last-build-time') {
+      steps {
+        script  {
+
+          build = getLastSuccessBuild(currentBuild)
+          
+          LAST_BUILD_TIME = getBuildTime(build)
+          println('last cussess build time:' + LAST_BUILD_TIME)
+        }
+      }
+    }
+    stage('prepare') {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        sh 'pip3 install -r cvapp-log-analyzer/requirements.txt'
+      }
+    }
+    stage('check mantis issue') {
+      environment {
+          LAST_BUILD_TIME = "${LAST_BUILD_TIME}"
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          script  {
+            try {
+              sh """
+                  cd cvapp-log-analyzer
+                  python3 ./analyzer.py --download \
+                  -P 'CV2KApp窓口' \
+                  --url 'http://osoft-de-c.olympus.co.jp/mantis/ipf3/app/api/soap/mantisconnect.php?wsdl' \
+                  --username $USERNAME --password $PASSWORD
+              """
+            } catch(Exception ex) {
+                println(ex)
+                currentBuild.result = 'FAILURE'
+                error(ex)
+            }
+          }
+        }
+      }
+    }
+    
+    stage('list logs')  {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        script  {
+          files = findFiles(glob: 'cvapp-log-analyzer/attachments/**/*.log')
+          for(file in files) {
+            echo """
+             ${file.name} ${file.path} ${file.directory} ${file.length} ${file.lastModified}
+            """
+            
+            withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+              def path = file.path
+              def tmp = path.split('/')
+              def issueId = tmp[2]
+              def logBinary = tmp.last()
+              def logName = tmp.last().split('\\.')[0]
+              println('logName:' + logName)
+              println('upload and analyze log:' + path)
+
+              sh """
+                python3 triggerPeckerTask.py -b $path
+              """
+              def task_id = sh(returnStdout: true, script: "cat $logName")
+              def resultUrl = "http://10.121.88.122:8080/#/log/" + task_id + "/1"
+
+              println('issue id:' + issueId)
+              println('update issue status to 40')
+
+              sh """
+                cd cvapp-log-analyzer
+                python3 ./analyzer.py \
+                  -P 'CV2KApp窓口' \
+                  --url 'http://osoft-de-c.olympus.co.jp/mantis/ipf3/app/api/soap/mantisconnect.php?wsdl' \
+                  --username $USERNAME --password $PASSWORD \
+                  --issueId $issueId \
+                  --issue-status 40
+              """
+
+              sh """
+                cd cvapp-log-analyzer
+                python3 ./analyzer.py \
+                  -P 'CV2KApp窓口' \
+                  --url 'http://osoft-de-c.olympus.co.jp/mantis/ipf3/app/api/soap/mantisconnect.php?wsdl' \
+                  --username $USERNAME --password $PASSWORD \
+                  --issueId $issueId \
+                  --message "${logBinary}\n${resultUrl}"
+              """
+
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,96 @@
+
+def getJobLastBuildNumber(jobName) {
+    println(jobName)
+    def job = Hudson.instance.getItemByFullName(jobName)
+    
+    def lastBuild = job.getLastCompletedBuild()
+    println lastBuild.number
+    return lastBuild.number
+}
+
+@NonCPS
+def waitSeconds(jobName, seconds) {
+    def job = Hudson.instance.getItemByFullName(jobName)
+    
+    if(job.isBuilding())
+      sleep seconds
+}
+
+def getNewFileName(filePath, appendString) {
+  def f = new File(filePath)
+  if(f.name.contains('.')) {
+    def name = f.name.take(f.name.lastIndexOf('.'))
+    def ext = f.name.substring(f.name.lastIndexOf(".") + 1)
+    println name
+    println ext
+    newName = name + appendString + '.' + ext
+  }
+  else {
+    newName = f.name + appendString
+  }
+  return newName
+}
+
+pipeline {
+  parameters {
+    string(name: 'projectName', defaultValue: 'release-windows-otv', description: 'project name')
+    string(name: 'buildId', defaultValue: '', description: 'build id')
+    string(name: 'timestamp', defaultValue: '9999-12-23_00-00-00', description: 'timestamp to append')
+    string(name: 'dest', defaultValue: 'webdav/ipf3/ci_data/package', description: 'destination')
+    string(name: 'file', defaultValue: 'release-windows-otv.zip', description: 'specific file to upload')
+  }
+  agent { node { label 'webdav' } }
+  stages {
+    stage('check job') {
+      steps {
+        script {
+          waitSeconds(params.projectName, 180)
+        }
+      }
+    }
+    stage('checkout') {
+      steps {
+        cleanWs()
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'shihpo_auth_info', url: 'https://enosta.olympus.co.jp/gitlab_01/ipf3/copy_artificats_webdav.git']]])
+      }
+    }
+    stage('copy artifacts') {
+      steps {
+        script {
+          def buildId = ''
+          if(params.buildId != '' ) {
+            copyArtifacts filter: params.file, fingerprintArtifacts: true, projectName: params.projectName, selector: specific(params.buildId)
+            buildId = params.buildId
+          }
+          else {
+            copyArtifacts filter: params.file, fingerprintArtifacts: true, projectName: params.projectName, selector: lastSuccessful()
+            buildNumber = getJobLastBuildNumber(params.projectName)
+            buildId = buildNumber.toString()
+          }
+
+          newName = getNewFileName(params.file, "#${buildId}-${params.timestamp}")
+          sh """
+            mv ${params.file} ${newName}
+          """
+        }
+      }
+    }
+    stage('upload') {
+      steps {
+        script {
+          echo newName
+          withCredentials([usernamePassword(credentialsId: 'shihpo_auth_info', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+            sh(script:  """
+              python3 copy_artificats.py \
+                --host https://enosta.olympus.co.jp \
+                --username $USER --password $PASS \
+                --files ${newName} \
+                --dest=${params.dest}/${params.projectName} --mkdir --p
+            """
+            )
+          }    
+        }
+      }
+    }
+  }
+}

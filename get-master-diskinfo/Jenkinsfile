@@ -1,0 +1,40 @@
+pipeline {
+  agent { node { label 'master' } }
+  stages {
+    stage('prepare') {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        script {
+          def proc = "df -BM /".execute()
+          proc.waitFor()
+
+          def reader = new StringReader(proc.in.text)
+          def lines = reader.readLines()
+          def usage = lines.last().split()
+          println "total " + usage[0]
+          println "usaged " + usage[1]
+          println "available " + usage[2]
+          println "% " + usage[3]
+          def availableSize = usage[2].split('M')[0].toInteger()
+          post = false
+          if (availableSize < 30000) {
+            post = true
+          }
+          def body = [
+              text: "Master slaveの空き容量: " + usage[2] + "B"
+          ]
+          bodyString = groovy.json.JsonOutput.toJson(body)
+          rcWebhookUrl = 'https://enosta.olympus.co.jp/rocketchat/ipf3/hooks/oWfgr7Lq5E5kPZhSX/YqDRFXwtg5EGjzeqcAK2zuz5yYsjfLPsPg33PRNW9zCTum7r'
+        }
+        script {
+          if(post) {
+            httpRequest httpMode: 'POST', responseHandle: 'NONE', url: "${rcWebhookUrl}", requestBody: "${bodyString}"
+          }
+        }
+      }
+    }
+  }
+}

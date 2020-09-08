@@ -1,0 +1,71 @@
+import java.time.ZonedDateTime
+import java.text.SimpleDateFormat
+
+import hudson.plugins.nested_view.NestedView;
+
+def toDateString(time) {
+  def millis = time.toInstant().toEpochMilli()
+  println millis
+
+  def date = new Date(millis)
+  def dateFormat = new SimpleDateFormat("yyyyMMddHHmmss");
+  return dateFormat.format(date)
+}
+
+def getCurrentZonedTime() {
+  def localTime = ZonedDateTime.now() 
+  return localTime
+}
+
+def getNodeStatus(slaves) {
+  def stringwriter = new StringWriter()
+  def blackList = ["qv-private-14-814",
+    "private-pc-16-032D",
+    "swict-v0045",
+    "private-devel-pc-13-025",
+    "private-devel-pc-17-060D",
+    "private-pc-J5000598",
+    "private-pc-J5001403",
+    "private-pc-J5100471",
+    "private-pc-L51N3008",
+    "private-pc-J5101609",
+    "private-pc-J5101208"]
+  slaves.each {
+    println it.nodeName
+    println it.computer.offline
+
+    if(blackList.contains(it.nodeName)) {
+      return
+    }
+
+    if(it.computer.offline) {
+      stringwriter.write(it.nodeName + ' is offline.\\n')
+    }
+  }
+  return stringwriter.toString()
+}
+
+def nodeOfflineStatus = [:]
+
+pipeline {
+  agent { node { label 'linux-docker-slave' } }
+  stages {
+    stage('run') {
+      environment {
+          PYTHON = 'python3'
+          JENKINS_URL = 'http://10.155.66.151/jenkins'
+      }
+      steps {
+        script {
+          def str = getNodeStatus(Hudson.instance.slaves)
+          if(str != "") {
+            sh('''
+              $PYTHON -c \
+                "import requests;requests.post('https://enosta.olympus.co.jp/rocketchat/ipf3/hooks/oWfgr7Lq5E5kPZhSX/YqDRFXwtg5EGjzeqcAK2zuz5yYsjfLPsPg33PRNW9zCTum7r', data={'text': ' ''' +str+ ''' '})"
+            ''')
+          }
+        }
+      }
+    }
+  }
+}

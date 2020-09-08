@@ -1,0 +1,86 @@
+import java.time.ZonedDateTime
+import java.text.SimpleDateFormat
+
+def toDateString(time) {
+  def millis = time.toInstant().toEpochMilli()
+  println millis
+
+  def date = new Date(millis)
+  def dateFormat = new SimpleDateFormat("yyyyMMddHHmmss");
+  return dateFormat.format(date)
+}
+
+def getCurrentZonedTime() {
+  def localTime = ZonedDateTime.now() 
+  return localTime
+}
+
+pipeline {
+  agent { node { label 'linux-sdk-slave' } }
+  parameters {
+    string(name: 'rev', defaultValue: '', description: 'Enter the reversion to build ')
+    string(name: 'tag', defaultValue: '', description: 'Enter tag name to create')
+  }
+  stages {
+    stage('checkout')  {
+      steps {
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: '.', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/woodpecker/trunk']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+      }
+    }
+    stage('prepare') {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          script {
+            sh "svn upgrade"
+            if("${params.rev}" != '') {
+              sh "svn up -r ${params.rev} --username $USERNAME --password $PASSWORD"
+            }
+          }
+        }
+        sh 'npm install'
+      }
+    }
+    stage('run') {
+      steps {
+        script {
+          currentTime = getCurrentZonedTime()
+          currentTimeStr = toDateString(currentTime)
+
+          def archiveName = 'woodpecker-web-' + currentTimeStr
+
+          if("${params.tag}" != '') {
+            archiveName += '-' + "${params.tag}" + '.tar.bz2'
+
+            withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+              script {
+                sh """
+                  svn copy http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/woodpecker/trunk \
+                    http://osoft-de-c.olympus.co.jp/svn/ipf3/offshore-src/tools/woodpecker/tags/${params.tag} \
+                     -m "refs #44331: create tag ${params.tag}" \
+                    --username $USERNAME --password $PASSWORD
+                """
+              }
+            }
+          }
+          else if("${params.rev}" != '') {
+            archiveName += '-' + "${params.rev}" + '.tar.bz2'
+          }
+          else {
+            archiveName += '.tar.bz2'
+          }
+
+          sh 'npm run build'
+          sh('''
+            tar cjf '''+archiveName+''' dist
+          ''')
+
+          archiveArtifacts archiveName
+        }
+      }
+    }
+  }
+}

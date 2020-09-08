@@ -1,0 +1,63 @@
+import java.time.ZonedDateTime
+import java.text.SimpleDateFormat
+
+import hudson.plugins.nested_view.NestedView;
+
+def toDateString(time) {
+  def millis = time.toInstant().toEpochMilli()
+  println millis
+
+  def date = new Date(millis)
+  def dateFormat = new SimpleDateFormat("yyyyMMddHHmmss");
+  return dateFormat.format(date)
+}
+
+def getCurrentZonedTime() {
+  def localTime = ZonedDateTime.now() 
+  return localTime
+}
+
+pipeline {
+  agent { node { label 'linux-docker-slave' } }
+  stages {
+    stage('checkout')  {
+      steps {
+
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'shihpo_auth_info', url: 'https://enosta.olympus.co.jp/gitlab_01/ipf3/jenkins-groovy.git']]]) 
+      }
+    }
+    stage('prepare') {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        sh 'pip3 install -r requirements.txt'
+        sh 'cat /dev/null > result'
+      }
+    }
+    stage('run') {
+      environment {
+          PYTHON = 'python3'
+          JENKINS_URL = 'http://10.155.66.151/jenkins'
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'ipf3-system-token', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          script  {
+            sh('''
+                $PYTHON execute.py \
+                    -u $USERNAME \
+                    -t $PASSWORD \
+                    -U $JENKINS_URL \
+                    -g master/printDiskInfo.groovy > output
+            ''')
+            sh('''
+              cat output | awk '{if ($1 == "Result:") {gsub("Result: ", "", $0); a = NR; } if(a!=null) {print } }' > result
+            ''')
+          }
+        }
+        archiveArtifacts 'result'
+      }
+    }
+  }
+}

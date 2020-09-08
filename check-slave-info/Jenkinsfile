@@ -1,0 +1,79 @@
+import java.time.ZonedDateTime
+import java.text.SimpleDateFormat
+
+import hudson.plugins.nested_view.NestedView;
+
+def toDateString(time) {
+  def millis = time.toInstant().toEpochMilli()
+  println millis
+
+  def date = new Date(millis)
+  def dateFormat = new SimpleDateFormat("yyyyMMddHHmmss");
+  return dateFormat.format(date)
+}
+
+def getCurrentZonedTime() {
+  def localTime = ZonedDateTime.now() 
+  return localTime
+}
+
+pipeline {
+  agent { node { label 'linux-docker-slave' } }
+  stages {
+    stage('checkout')  {
+      steps {
+
+        checkout([$class: 'SubversionSCM', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations: [[cancelProcessOnExternalsFail: true, credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', depthOption: 'infinity', ignoreExternalsOption: true, local: 'jenkins-groovy', remote: 'http://osoft-de-c.olympus.co.jp/svn/ipf3/app/tools/jenkins/jenkins-groovy']], quietOperation: true, workspaceUpdater: [$class: 'UpdateUpdater']])
+
+        withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          script  {
+            currentTime = getCurrentZonedTime()
+            before7DaysTime = currentTime.minusDays(7)
+            currentTimeStr = toDateString(currentTime)
+            println toDateString(currentTime)
+            println toDateString(before7DaysTime)
+
+          }
+        }
+      }
+    }
+    stage('prepare') {
+      environment {
+          http_proxy = 'http://proxy.olympus.co.jp:8080'
+          https_proxy = 'http://proxy.olympus.co.jp:8080'
+      }
+      steps {
+        sh 'pip3 install -r jenkins-groovy/requirements.txt'
+        sh 'cat /dev/null > result'
+      }
+    }
+    stage('run') {
+      environment {
+          PYTHON = 'python3'
+          JENKINS_URL = 'http://10.155.66.151/jenkins'
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'ipf3-system-token', passwordVariable: 'PASSWORD', usernameVariable: 'USERNAME')]) {
+          script  {
+            def nodeList = []
+            Hudson.instance.slaves.each {
+              nodeList << it.nodeName
+            }
+            nodeList.each {
+              sh('''
+                  $PYTHON jenkins-groovy/execute.py \
+                      -u $USERNAME \
+                      -t $PASSWORD \
+                      -U $JENKINS_URL \
+                      -g jenkins-groovy/slave/printSlaveInfoOnNode.groovy \
+                      --node-name '''+it+'''  2>&1 | bash retrieve-node-info.sh '''+it+''' >> result
+              ''')
+              
+            }
+          }
+        }
+        archiveArtifacts 'result'
+      }
+    }
+  }
+}

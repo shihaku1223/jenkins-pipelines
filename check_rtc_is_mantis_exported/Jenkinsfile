@@ -1,0 +1,47 @@
+pipeline {
+  agent {node { label 'private-pc-J5000597'}}
+
+  environment {
+    HTTP_PROXY = 'http://10.156.1.120:8080'
+    HTTPS_PROXY = 'http://10.156.1.120:8080'
+  }
+  stages {
+    stage('check vpn connection') {
+      steps {
+        bat '''
+          set VPNCLI="C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpncli.exe"
+          %VPNCLI% state |grep "state: Connected"
+          IF /I "%ERRORLEVEL%" NEQ "0" (
+            ECHO disconncted
+            exit 1
+          )
+        '''
+      }
+    }
+    stage('prepare') {
+      steps {
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'shihpo_auth_info', url: 'https://enosta.olympus.co.jp/gitlab_01/ipf3/rtc_check.git']]])
+
+        withCredentials([usernamePassword(credentialsId: 'shihpo_auth_info', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+          bat '''
+            py -m pip install --upgrade --index-url=http://%USER%:%PASS%@nexus3-nexus.ape.hon.olympus.co.jp/nexus_01/repository/ipf3-pypi-hosted/simple --trusted-host=nexus3-nexus.ape.hon.olympus.co.jp -r requirements.txt
+          '''
+        }
+      }
+    }
+    stage('check') {
+      steps {
+
+        withCredentials([usernamePassword(credentialsId: '3fc54269-d115-4e30-983c-55616a93c22f', passwordVariable: 'PASS', usernameVariable: 'USER'), usernamePassword(credentialsId: 'SOMED_RTC', passwordVariable: 'RTC_PASS', usernameVariable: 'RTC_USER')]) {
+          bat '''
+            py -3 check.py --rtc https://www.somed002.sony.co.jp/ccm ^
+              --username %RTC_USER% --password %RTC_PASS% ^
+              --mantis_username %USER% --mantis_password %PASS% ^
+              --projectarea IPF-3OTV_Project ^
+              2>stderr
+          '''
+        }
+      }
+    }
+  }
+}
